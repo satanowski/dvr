@@ -7,6 +7,5 @@ isort:
 black: isort
   uv run black $(git ls-files '*.py')
 
-
-clean:
-  rm -f dvr.sqlite
+pip:
+  uv pip freeze > requirements.txt

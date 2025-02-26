@@ -37,7 +37,8 @@ class DvrDB:
         self.session = Session(self.engine)
         if not self.channels_defined:
             self.add_channels(CHANNELS)
-        self.session.execute(VIEW_EVENTS_SQL)
+
+        # self.session.execute(VIEW_EVENTS_SQL)
 
     @property
     def channels_defined(self) -> bool:
@@ -160,11 +161,10 @@ class DvrDB:
         query = (
             query.where(
                 and_(
-                    Event.to_be_recorded
-                    == False,  # pylint:disable=singleton-comparison
+                    Event.to_be_recorded == False,
                     Event.start_ts > int(round(datetime.now().timestamp())),
                 )
-            )
+            ).where(FilmwebEntry.ignored == False)
             .distinct(FilmwebEntry.title)
             .order_by(FilmwebEntry.title.asc())
         )

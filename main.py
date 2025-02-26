@@ -142,7 +142,7 @@ def schedule_for_recording(channel: str, select: bool):
     titles2skip.extend(movies)
     titles2skip.extend(
         [
-            (ev.FilmwebEntry.safe_title, ev.FilmwebEntry.year)
+            (ev.fw_entry.safe_title, ev.fw_entry.year)
             for ev in dvrdb.get_scheduled()
         ]
     )
