@@ -91,25 +91,28 @@ def check_plan_and_start_stop_recording_if_needed():
         log.debug("nothing to do")
         return
 
-    for event, channel in events2stop:
-        log.info(f"Stopping event {event.title} on adapter {event.recorder}...")
+    for event in events2stop:
+        log.info(
+            f"Stopping event {event.fw_entry.title} on adapter {event.recorder}..."
+        )
         if recorders[event.recorder].stop_rec():
             dvrdb.marked_as_being_recorded(event)
             notify(event)
 
-    for event, channel in events2start:
+    for event in events2start:
         dvb = get_free_recorder()
         if dvb is None:
             log.warning(
-                f"Cannot start recording of {event.title}! No recorders available!"
+                f"Cannot start recording of {event.fw_entry.title}! No recorders available!"
             )
             return
 
         log.info(
-            f"Starting recording of event {event.title} on adapter {dvb.adapter}..."
+            f"Starting recording of event {event.fw_entry.title} on adapter {dvb.adapter}..."
         )
         if dvb.start_rec(
-            channel.name, f"{REC_DIR}/{channel.safe_name}_{event.rec_file_name}"
+            event.channel.name,
+            f"{REC_DIR}/{event.channel.safe_name}_{event.fw_entry.rec_file_name}",
         ):
             dvrdb.marked_as_being_recorded(event, dvb.adapter)
             log.debug("recording started")
@@ -137,14 +140,22 @@ def schedule_for_recording(channel: str, select: bool):
     filtered = []
     titles2skip = []
     titles2skip.extend(movies)
-    titles2skip.extend([(ev.safe_title, ev.year) for ev, _ in dvrdb.get_scheduled()])
-    for ev, ch in dvrdb.get_events_for_schedule(channel=selected_channel):
-        if (ev.safe_title, ev.year) in titles2skip:
+    titles2skip.extend(
+        [
+            (ev.FilmwebEntry.safe_title, ev.FilmwebEntry.year)
+            for ev in dvrdb.get_scheduled()
+        ]
+    )
+
+    # filter out stuff which is already scheduled for recording
+    for ev in dvrdb.get_events_for_schedule(channel=selected_channel):
+        if (ev.fw_entry.safe_title, ev.fw_entry.year) in titles2skip:
             log.debug(
-                f"{ev.title} ({ev.year}) skipped as it is already recorded or scheduled"
+                f"{ev.fw_entry.title} ({ev.fw_entry.year}) "
+                "skipped as it is already recorded or scheduled"
             )
         else:
-            filtered.append((ev, ch))
+            filtered.append(ev)
 
     results_array = checkboxlist_dialog(
         title="Select event",
@@ -152,11 +163,15 @@ def schedule_for_recording(channel: str, select: bool):
         values=[
             (
                 event.id,
-                f"{event.title} ({event.year}) [{channel.name}] ({event.start_t}-{event.stop_t})",
+                (
+                    f"{event.fw_entry.title} ({event.fw_entry.year}) "
+                    f"[{event.channel.name}] ({event.duration // 60}min)"
+                ),
             )
-            for event, channel in filtered
+            for event in filtered
         ],
     ).run()
+
     if not results_array:
         log.warning(f"No events scheduled for recording on {selected_channel}.")
     else:
@@ -169,17 +184,17 @@ def show_recording_plan(just_today=False):
     """Display events scheduled for recording"""
     results = dvrdb.get_scheduled(just_today)
     if not results:
-        log.warning("Nothing scheduled")
+        log.warning(f"Nothing scheduled{' for today' if just_today else ''}")
         return
     print_formatted_text(
         HTML(f"<green>{len(results)}</green> events scheduled:"), style=style
     )
-    for event, channel in results:
+    for event in results:
         print_formatted_text(
             HTML(
-                f"<green>{event.title: >45}</green> "
-                f"(<b>{event.year: >4}</b>) -> <yellow>{event.start_t[:10]:>10}</yellow> "
-                f"<pink>{event.start_t[10:]:>5}</pink> @ <i>{channel.name}</i>"
+                f"<green>{event.fw_entry.title: >45}</green> "
+                f"(<b>{event.fw_entry.year: >4}</b>) -> <yellow>{event.start_t[:10]:>10}</yellow> "
+                f"<pink>{event.start_t[10:]:>5}</pink> @ <i>{event.channel.name}</i>"
             ),
             style=style,
         )
@@ -193,9 +208,12 @@ def unschedule_recording():
         values=[
             (
                 event.id,
-                f"{event.title} ({event.year}) [{channel.name}] ({event.start_t}-{event.stop_t})",
+                (
+                    f"{event.fw_entry.title} ({event.fw_entry.year}) "
+                    f"[{event.channel.name}] ({event.start_t}-{event.stop_t})"
+                ),
             )
-            for event, channel in dvrdb.get_scheduled()
+            for event in dvrdb.get_scheduled()
         ],
     ).run()
     if not to_be_removed_from_schedule:
@@ -222,9 +240,23 @@ def serve():
 def check_epg(title: str):
     """Check if given title exists in DB"""
     for event in dvrdb.get_events(title):
-        click.echo(click.style(event, fg="green"))
+        click.echo(
+            click.style(f"{event.fw_entry.title} ({event.fw_entry.year})", fg="green")
+        )
+        click.echo(
+            click.style(
+                (
+                    f"\tchannel: {event.channel.name}\n"
+                    f"\tto be recorded: {event.to_be_recorded}\n"
+                    f"\tignored: {event.fw_entry.ignored}"
+                ),
+                fg="yellow",
+            )
+        )
+
 
 def perform_rec_test():
+    """Special function to test recording on all dvb dongles"""
     # ensure all recorders are free
     rec_dir = Path(REC_DIR)
     log.debug("Stopping recording if any...")
@@ -235,13 +267,20 @@ def perform_rec_test():
         sleep(1)
     for recorder in recorders:
         for channel in dvrdb.get_channels():
-            log.debug(f"Recording channel '{channel.name}' on adapter {recorder.adapter}...")
+            log.debug(
+                f"Recording channel '{channel.name}' on adapter {recorder.adapter}..."
+            )
             recorder.start_rec(
                 channel=channel.name,
-                recfile=(rec_dir / f"adapter_{recorder.adapter}__{channel.safe_name}.mts"))
+                recfile=(
+                    rec_dir / f"adapter_{recorder.adapter}__{channel.safe_name}.mts"
+                ),
+            )
             sleep(10)
             recorder.stop_rec()
-            log.debug(f"Recording channel '{channel.name}' on adapter {recorder.adapter} stopped")
+            log.debug(
+                f"Recording channel '{channel.name}' on adapter {recorder.adapter} stopped"
+            )
     log.debug("Test procedure finished. You can now examine the files")
 
 
