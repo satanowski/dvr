@@ -21,7 +21,6 @@ CHANNELS = (
     ("Stopklatka", "Stopklatka"),
     ("Super+Polsat", "Super Polsat"),
     ("TTV", "TTV"),
-    ("TV+Polonia", "TV Polonia"),
     ("TV+Puls", "TV Puls"),
     ("TV4", "TV4"),
     ("TV6", "TV6"),

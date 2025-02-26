@@ -224,6 +224,26 @@ def check_epg(title: str):
     for event in dvrdb.get_events(title):
         click.echo(click.style(event, fg="green"))
 
+def perform_rec_test():
+    # ensure all recorders are free
+    rec_dir = Path(REC_DIR)
+    log.debug("Stopping recording if any...")
+    for recorder in recorders:
+        if recorder.busy:
+            log.debug(f"Stopping recording on recorder: {recorder.adapter}")
+            recorder.stop_rec()
+        sleep(1)
+    for recorder in recorders:
+        for channel in dvrdb.get_channels():
+            log.debug(f"Recording channel '{channel.name}' on adapter {recorder.adapter}...")
+            recorder.start_rec(
+                channel=channel.name,
+                recfile=(rec_dir / f"adapter_{recorder.adapter}__{channel.safe_name}.mts"))
+            sleep(10)
+            recorder.stop_rec()
+            log.debug(f"Recording channel '{channel.name}' on adapter {recorder.adapter} stopped")
+    log.debug("Test procedure finished. You can now examine the files")
+
 
 @click.command()
 @click.option("-a", "--action", type=str, help="Run action", default="")
@@ -255,6 +275,7 @@ def main(
         "scan": scan_for_channels,
         "sched": (schedule_for_recording, channel, select),
         "serve": serve,
+        "test": perform_rec_test,
     }
     if action not in action_map:
         log.error(f"Action `{action}` unknown!")
