@@ -15,7 +15,7 @@ from prompt_toolkit.styles import Style
 from unidecode import unidecode
 
 from db import DvrDB
-from defaults import CONFIG_DIR, DONGLE_NUM, MOVIES_DIR, REC_DIR
+from defaults import CONFIG_DIR, DONGLE_NUM, MOVIES_DIR, REC_DIR, TO_SHORT_LIMIT
 from dvb import DVB
 from filmweb import get_epg
 from models import sch
@@ -92,27 +92,26 @@ def check_plan_and_start_stop_recording_if_needed():
         return
 
     for event in events2stop:
-        log.info(
-            f"Stopping event {event.fw_entry.title} on adapter {event.recorder}..."
-        )
+        log.info(f"Stopping event {event.filmweb.title} on adapter {event.recorder}...")
         if recorders[event.recorder].stop_rec():
-            dvrdb.marked_as_being_recorded(event)
+            dvrdb.marked_as_being_recorded(event.id)
+            dvrdb.marked_as_recorded(event.filmweb.id)
             notify(event)
 
     for event in events2start:
         dvb = get_free_recorder()
         if dvb is None:
             log.warning(
-                f"Cannot start recording of {event.fw_entry.title}! No recorders available!"
+                f"Cannot start recording of {event.filmweb.title}! No recorders available!"
             )
             return
 
         log.info(
-            f"Starting recording of event {event.fw_entry.title} on adapter {dvb.adapter}..."
+            f"Starting recording of event {event.filmweb.title} on adapter {dvb.adapter}..."
         )
         if dvb.start_rec(
             event.channel.name,
-            f"{REC_DIR}/{event.channel.safe_name}_{event.fw_entry.rec_file_name}",
+            f"{REC_DIR}/{event.channel.safe_name}_{event.filmweb.rec_file_name}",
         ):
             dvrdb.marked_as_being_recorded(event, dvb.adapter)
             log.debug("recording started")
@@ -123,16 +122,14 @@ def schedule_for_recording(channel: str, select: bool):
     selected_channel = (
         radiolist_dialog(
             title="Select channel",
-            values=[
-                (channel.id, channel.name) for channel in dvrdb.get_channels(sort=False)
-            ],
+            values=[(channel.id, channel.name) for channel in dvrdb.get_channels()],
         ).run()
         if select
         else None
     )
 
     selected_channel = (
-        dvrdb.channel_by_id(selected_channel).name if selected_channel else channel
+        dvrdb.get_channel_by_id(selected_channel).name if selected_channel else channel
     )
 
     # filter out stuff we already have
@@ -141,36 +138,41 @@ def schedule_for_recording(channel: str, select: bool):
     titles2skip = []
     titles2skip.extend(movies)
     titles2skip.extend(
-        [
-            (ev.fw_entry.safe_title, ev.fw_entry.year)
-            for ev in dvrdb.get_scheduled()
-        ]
+        [(epg.filmweb.safe_title, epg.filmweb.year) for epg in dvrdb.get_scheduled()]
     )
 
     # filter out stuff which is already scheduled for recording
-    for ev in dvrdb.get_events_for_schedule(channel=selected_channel):
-        if (ev.fw_entry.safe_title, ev.fw_entry.year) in titles2skip:
+    for epg in dvrdb.get_events_for_schedule(channel=selected_channel):
+        if (epg.filmweb.safe_title, epg.filmweb.year) in titles2skip:
             log.debug(
-                f"{ev.fw_entry.title} ({ev.fw_entry.year}) "
+                f"{epg.filmweb.title} ({epg.filmweb.year}) "
                 "skipped as it is already recorded or scheduled"
             )
-        else:
-            filtered.append(ev)
-
-    results_array = checkboxlist_dialog(
-        title="Select event",
-        text="Movies in near future",
-        values=[
-            (
-                event.id,
-                (
-                    f"{event.fw_entry.title} ({event.fw_entry.year}) "
-                    f"[{event.channel.name}] ({event.duration // 60}min)"
-                ),
+        elif epg.duration < TO_SHORT_LIMIT * 60:
+            log.debug(
+                f"Event '{epg.filmweb.title}' shorter than {TO_SHORT_LIMIT} minutes. Skipp"
             )
-            for event in filtered
-        ],
-    ).run()
+        else:
+            filtered.append(epg)
+
+    if len(filtered) > 0:
+        results_array = checkboxlist_dialog(
+            title="Select event",
+            text="Movies in near future",
+            values=[
+                (
+                    event.id,
+                    (
+                        f"{event.filmweb.title} ({event.filmweb.year}) "
+                        f"[{event.channel.name}] ({event.duration // 60}min)"
+                    ),
+                )
+                for event in filtered
+            ],
+        ).run()
+    else:
+        log.warning(f"No schedulable events to display! ({channel})")
+        results_array = []
 
     if not results_array:
         log.warning(f"No events scheduled for recording on {selected_channel}.")
@@ -189,12 +191,13 @@ def show_recording_plan(just_today=False):
     print_formatted_text(
         HTML(f"<green>{len(results)}</green> events scheduled:"), style=style
     )
-    for event in results:
+    for epg in results:
         print_formatted_text(
             HTML(
-                f"<green>{event.fw_entry.title: >45}</green> "
-                f"(<b>{event.fw_entry.year: >4}</b>) -> <yellow>{event.start_t[:10]:>10}</yellow> "
-                f"<pink>{event.start_t[10:]:>5}</pink> @ <i>{event.channel.name}</i>"
+                f"<green>{epg.filmweb.title: >45}</green> "
+                f"(<b>{epg.filmweb.year:>4}</b>) -> <yellow>{epg.start_time_short}</yellow> "
+                f"<pink>{epg.start_time_short}</pink> @ <i>{epg.channel.name}</i>"
+                f" {epg.duration//60}min"
             ),
             style=style,
         )
@@ -202,20 +205,25 @@ def show_recording_plan(just_today=False):
 
 def unschedule_recording():
     """Mark events as not scheduled for recording"""
-    to_be_removed_from_schedule = checkboxlist_dialog(
-        title="Select event to remove from schedule",
-        text="Movies scheduled to be recorded",
-        values=[
-            (
-                event.id,
+    scheduled = dvrdb.get_scheduled()
+    if scheduled:
+        to_be_removed_from_schedule = checkboxlist_dialog(
+            title="Select event to remove from schedule",
+            text="Movies scheduled to be recorded",
+            values=[
                 (
-                    f"{event.fw_entry.title} ({event.fw_entry.year}) "
-                    f"[{event.channel.name}] ({event.start_t}-{event.stop_t})"
-                ),
-            )
-            for event in dvrdb.get_scheduled()
-        ],
-    ).run()
+                    epg.id,
+                    (
+                        f"{epg.filmweb.title} ({epg.filmweb.year}) "
+                        f"[{epg.channel.name}] ({epg.start_time_short}-{epg.stop_time_short})"
+                    ),
+                )
+                for epg in scheduled
+            ],
+        ).run()
+    else:
+        to_be_removed_from_schedule = None
+
     if not to_be_removed_from_schedule:
         log.warning("No events selected to be removed from recording schedule")
     else:
@@ -239,16 +247,16 @@ def serve():
 
 def check_epg(title: str):
     """Check if given title exists in DB"""
-    for event in dvrdb.get_events(title):
-        click.echo(
-            click.style(f"{event.fw_entry.title} ({event.fw_entry.year})", fg="green")
-        )
+    for epg in dvrdb.get_epgs_by_title(title):
+        click.echo(click.style(f"{epg.filmweb.title} ({epg.filmweb.year})", fg="green"))
         click.echo(
             click.style(
                 (
-                    f"\tchannel: {event.channel.name}\n"
-                    f"\tto be recorded: {event.to_be_recorded}\n"
-                    f"\tignored: {event.fw_entry.ignored}"
+                    f"\tchannel: {epg.channel.name}\n"
+                    f"\tto be recorded: {epg.scheduled}\n"
+                    f"\tFW ID: {epg.filmweb.id}\n"
+                    f"\tignored: {epg.filmweb.ignored}\n"
+                    f"\ton-air: {epg.start_time_short} - {epg.stop_time_short}"
                 ),
                 fg="yellow",
             )

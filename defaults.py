@@ -15,3 +15,4 @@ DVB_LNA = 1
 MOVIES_DIR = os.getenv("MOVIES_DIR")
 REC_DIR = os.getenv("REC_DIR", "./rec")
 DB_CONN = os.getenv("DB_CONN")
+TO_SHORT_LIMIT = int(os.getenv("TO_SHORT_LIMIT", "45"))

@@ -8,7 +8,7 @@ from datetime import datetime
 
 from loguru import logger as log
 
-from models import Event
+from models import EPG
 
 PUSHOVER_TOKEN = os.getenv("PUSHOVER_TOKEN")
 PUSHOVER_USR_KEY = os.getenv("PUSHOVER_USR_KEY")
@@ -16,11 +16,11 @@ PUSHOVER_USR_KEY = os.getenv("PUSHOVER_USR_KEY")
 sch = re.compile(r"[^a-zA-Z\d ]")
 
 
-def notify(event: Event):
+def notify(epg_event: EPG):
     """Send notification about finished recording."""
     url = (
         "https://www.filmweb.pl/film/"
-        f"{sch.sub('+', event.title)}-{event.year}-{event.fid}"
+        f"{sch.sub('+', epg_event.title)}-{epg_event.year}-{epg_event.fid}"
     )
     conn = http.client.HTTPSConnection("api.pushover.net:443")
     conn.request(
@@ -31,11 +31,11 @@ def notify(event: Event):
                 "token": PUSHOVER_TOKEN,
                 "user": PUSHOVER_USR_KEY,
                 "html": 1,
-                "title": event.title,
+                "title": epg_event.title,
                 "timestamp": int(datetime.now().timestamp()),
                 "priority": -1,
                 "message": (
-                    f"Movie <a href='{url}'>{event.title}</a> ({event.year}) "
+                    f"Movie <a href='{url}'>{epg_event.title}</a> ({epg_event.year}) "
                     "has just been recorded :)"
                 ),
             }

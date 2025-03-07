@@ -1,5 +1,7 @@
 """Handle getting EPG from filmweb.pl"""
 
+# pylint: disable=too-many-locals
+
 import asyncio
 import concurrent.futures
 from datetime import datetime
@@ -63,6 +65,9 @@ async def get_epg_from_filmweb(channel_keys: List[str]) -> Iterable[RawEvent]:
                 link = div.find("a")
                 start = datetime(*map(int, div.get("data-start").split(",")))
                 end = datetime(*map(int, next_div.get("data-start").split(",")))
+
+                log.debug(f"new event '{unidecode(link.text)}': {start}  -  {end}")
+
                 if start < datetime.now():
                     continue
                 log.debug(f"Got '{link.text}'")
@@ -82,28 +87,24 @@ async def get_epg_from_filmweb(channel_keys: List[str]) -> Iterable[RawEvent]:
 
 def get_epg(dvrdb):
     """Parse output from filmweb and put it into db"""
-
-    ch_keys = dvrdb.get_channels_keys()
+    ch_keys = dvrdb.get_channel_keys()
     loop = asyncio.get_event_loop()
     raw_events = loop.run_until_complete(get_epg_from_filmweb(ch_keys))
 
     for raw_event in sorted(raw_events, key=lambda x: x.start):
-        log.debug(
-            f"Trying to add Filmweb Entry: {raw_event.title} ({raw_event.year})..."
-        )
-        fw_entry = dvrdb.add_or_get_filmweb_entry(
-            raw_event.fid, raw_event.title, raw_event.year
-        )
-        if not fw_entry:
-            log.error(
-                f"Cannot add/get Filmweb Entry! ({raw_event.title} ({raw_event.year}))"
-            )
+        fw_entry = dvrdb.get_filmweb_entry(raw_event.fid)
+        if fw_entry is None:
+            dvrdb.add_filmweb_entry(raw_event.fid, raw_event.title, raw_event.year)
+            fw_entry = dvrdb.get_filmweb_entry(raw_event.fid)
+
+        epg = dvrdb.get_epg(raw_event.fid, raw_event.start)
+        if epg:
+            log.warning(f"EPG {raw_event.title} ({raw_event.year}) already in DB")
             continue
 
-        log.debug(f"Adding recordable (raw) {raw_event} based on FW_Entry {fw_entry}")
-        dvrdb.add_event(
-            fw_entry=fw_entry,
-            start=raw_event.start_ts,
-            stop=raw_event.stop_ts,
+        dvrdb.add_epg(
+            fw_id=fw_entry.id,
+            start=raw_event.start,
+            stop=raw_event.end,
             channel_key=raw_event.channel,
         )
